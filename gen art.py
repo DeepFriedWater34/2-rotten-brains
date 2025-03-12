@@ -1,7 +1,19 @@
-#task1:Implement user authentication with different access levels (admin, participant, judge).
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
+from django.db.models import Count, Q
+from django.shortcuts import render
+import docker
+import os
+import subprocess
+import random
+from rest_framework import serializers
+from django.contrib import admin
+from channels.generic.websocket import AsyncWebsocketConsumer
+import json
 
+
+#  User Authentication with Different Access Levels
 class User(AbstractUser):
     ROLE_CHOICES = [
         ('admin', 'Admin'),
@@ -9,7 +21,9 @@ class User(AbstractUser):
         ('judge', 'Judge'),
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='participant')
-#probeem 2 Create a problem submission system with test case evaluation.
+
+
+#  Problem Submission System with Test Case Evaluation
 class Problem(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField()
@@ -18,46 +32,74 @@ class Problem(models.Model):
     test_cases = models.JSONField()  # Store test cases as JSON
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
 
+
 class Submission(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected')
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     problem = models.ForeignKey(Problem, on_delete=models.CASCADE)
     code = models.TextField()
     language = models.CharField(max_length=20, choices=[('python', 'Python'), ('cpp', 'C++')])
-    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('accepted', 'Accepted'), ('rejected', 'Rejected')])
-    execution_time = models.FloatField(null=True)
-    memory_used = models.FloatField(null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    execution_time = models.FloatField(null=True, blank=True)
+    memory_used = models.FloatField(null=True, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
-    #problem 3 Develop a real-time leaderboard that updates after every submission.
-from django.db.models import Count
-from django.shortcuts import render
-from .models import Submission
 
+
+#  Real-time Leaderboard
 def leaderboard(request):
-    users = User.objects.annotate(solved=Count('submission', filter=models.Q(submission__status='accepted')))
+    users = User.objects.annotate(
+        solved=Count('submission', filter=Q(submission__status='accepted'))
+    ).order_by('-solved')
     return render(request, 'leaderboard.html', {'users': users})
-    
-#problem 4 Implement a code execution sandbox with memory and time limits.
-import docker
 
-def execute_code(code, language, test_cases):
+
+#  Secure Code Execution Sandbox
+LANGUAGE_CONTAINERS = {
+    'python': 'python:3.8',
+    'cpp': 'gcc:latest',
+    'java': 'openjdk:11',
+}
+
+def execute_code(code, language):
     client = docker.from_env()
-    container = client.containers.run(
-        "python:3.8",  # Change this based on language
-        command=f"python3 -c '{code}'",
-        detach=True,
-        auto_remove=True,
-        mem_limit="100m",
-        cpu_period=50000
-    )
-    return container.logs()
-#problem 5Create a plagiarism detection system for submitted code.
-import requests
+    container_image = LANGUAGE_CONTAINERS.get(language, "python:3.8")
 
+    try:
+        container = client.containers.run(
+            container_image,
+            command=f"python3 -c '{code}'" if language == 'python' else f"g++ -o main.out && ./main.out",
+            detach=True,
+            auto_remove=True,
+            mem_limit="100m",
+            cpu_period=50000
+        )
+        return container.logs()
+    except Exception as e:
+        return str(e)
+
+
+#  Plagiarism Detection (MOSS Integration)
 def check_plagiarism(submission):
-    moss_url = "https://moss.com/api/check"
-    response = requests.post(moss_url, files={'file': submission.code})
-    return response.json()  # Returns similarity score
-#problem 6
+    moss_script_path = "moss.pl"  # Ensure MOSS script is installed
+    moss_user_id = "123456789"  # Replace with actual MOSS ID
+
+    file_path = f"temp_code/{submission.user.username}_{submission.problem.id}.txt"
+    os.makedirs("temp_code", exist_ok=True)
+    with open(file_path, "w") as f:
+        f.write(submission.code)
+
+    cmd = f"perl {moss_script_path} -u {moss_user_id} {file_path}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    return result.stdout  # Moss returns similarity percentage
+
+
+#  Contest System
 class Contest(models.Model):
     name = models.CharField(max_length=200)
     start_time = models.DateTimeField()
@@ -68,83 +110,100 @@ class Contest(models.Model):
     def is_active(self):
         now = timezone.now()
         return self.start_time <= now <= self.end_time
-#problem 7
+
+
+#  User Rating System
 class UserRating(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     rating = models.IntegerField(default=1500)
-#prob 8
-from channels.generic.websocket import AsyncWebsocketConsumer
-import json
 
+
+#  WebSockets for Real-Time Timer
 class TimerConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         await self.accept()
         await self.send(text_data=json.dumps({"time": "Contest started!"}))
-#prob 9
+
+
+#  Language Containers for Execution
 LANGUAGE_CONTAINERS = {
     'python': 'python:3.8',
     'cpp': 'gcc:latest',
     'java': 'openjdk:11',
 }
 
-def execute_code(code, language):
-    container_image = LANGUAGE_CONTAINERS.get(language, "python:3.8")
-#prob 10
+
+#  Team Collaboration
 class Team(models.Model):
     name = models.CharField(max_length=200)
     members = models.ManyToManyField(User)
 
-#prob 11
-from rest_framework import serializers
 
+#  API Serializer for Submission
 class SubmissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Submission
         fields = '__all__'
-#prob 12
-from django.contrib import admin
-from .models import User, Problem, Submission, Contest
 
+
+#  Admin Panel Registration
 admin.site.register(User)
 admin.site.register(Problem)
 admin.site.register(Submission)
 admin.site.register(Contest)
 
-#prob 13
+
+#  Problem Recommendation System
 def recommend_problems(user):
     solved_problems = user.submission_set.filter(status='accepted').values_list('problem_id', flat=True)
     return Problem.objects.exclude(id__in=solved_problems).order_by('?')[:5]
 
-#p14
+
+#  Achievement Badges
 class Badge(models.Model):
     name = models.CharField(max_length=100)
     criteria = models.CharField(max_length=200)
-#p15
-import random
 
+
+#  Random Test Case Generation
 def generate_test_case():
     a = random.randint(1, 100)
     b = random.randint(1, 100)
     return f"{a} {b}", f"{a + b}"
-#p16
+
+
+# Submission History View
 def submission_history(request):
     submissions = Submission.objects.filter(user=request.user)
     return render(request, 'submission_history.html', {'submissions': submissions})
-#p17
+
+
+# Forum System
 class ForumPost(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-#p18
+
+
+#  Problem Rating System
 class ProblemRating(models.Model):
     problem = models.ForeignKey(Problem, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     rating = models.IntegerField()
-#p19
+
+
+#  Database Backup & Restore (Commands)
+"""
+# Backup
 python manage.py dumpdata > backup.json
+
+# Restore
 python manage.py loaddata backup.json
-#p20
+"""
+
+
+
+#  Contest Statistics
 def contest_stats(contest):
     submissions = Submission.objects.filter(problem__contest=contest)
     return {"total_submissions": submissions.count()}
-
